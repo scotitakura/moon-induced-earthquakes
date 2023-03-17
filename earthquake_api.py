@@ -3,6 +3,21 @@ import json
 import os
 import snowflake.connector
 from prefect import flow, task
+from prefect_dbt.cloud import DbtCloudCredentials, DbtCloudJob
+from prefect_dbt.cloud.jobs import run_dbt_cloud_job
+
+DbtCloudCredentials(
+    api_key="f5586836d14b4b65586d8e147f44f0cc26214870",
+    account_id="127301"
+).save("scot_dbt_credentials")
+
+dbt_cloud_credentials = DbtCloudCredentials.load("scot_dbt_credentials")
+dbt_cloud_job = DbtCloudJob.load(
+    dbt_cloud_credentials=dbt_cloud_credentials,
+    job_id="172142"
+)
+
+DbtCloudJob.load("scot_dbt_credentials")
 
 url = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson'
 response = urlopen(url)
