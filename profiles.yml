@@ -1,0 +1,13 @@
+moon_eq:
+  outputs:
+    dev:
+      account: cd28840.us-east4.gcp
+      database: geo_raw
+      password: Neokiki01!
+      role: accountadmin
+      schema: geo_schema
+      threads: 1
+      type: snowflake
+      user: scotitakura
+      warehouse: geo_project
+  target: dev
