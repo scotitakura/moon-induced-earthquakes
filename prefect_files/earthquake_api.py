@@ -2,12 +2,13 @@ from urllib.request import urlopen
 import json
 import os
 import snowflake.connector
-import datetime
+from datetime import datetime
+import pytz
 import requests
+import re
 from bs4 import BeautifulSoup
-from astropy import units as u
-from astropy.coordinates import SkyCoord
 from prefect import flow, task
+from prefect.deployments import Deployment
 from prefect_dbt.cli import DbtCoreOperation
 from prefect_dbt.cloud import DbtCloudCredentials, DbtCloudJob
 from prefect_dbt.cloud.jobs import run_dbt_cloud_job
@@ -18,10 +19,6 @@ from prefect_dbt.cloud.jobs import run_dbt_cloud_job
 
 #dbt_cloud_credentials = DbtCloudCredentials.load("scot-dbt-credentials")
 #dbt_cloud_job = DbtCloudJob.load(dbt_cloud_credential, "245496")
-
-url = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson'
-response = urlopen(url)
-data_json = json.loads(response.read())
 
 @task
 def open_connection():
@@ -34,9 +31,13 @@ def open_connection():
         schema='GEO_SCHEMA'
         )
     cs = ctx.cursor()
+    return cs
 
 @task
-def upload_hourly_earthquake():
+def upload_hourly_earthquake(cs):
+    url = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson'
+    response = urlopen(url)
+    data_json = json.loads(response.read())
 
     for event in data_json['features'][::-1]:
         eq_time = event['properties']['time']
@@ -47,49 +48,42 @@ def upload_hourly_earthquake():
         eq_coordinates = event['geometry']['coordinates']
 
         try:
-            sql_statement = "INSERT INTO eq_table (eq_time, magnitude, place, sources, type, coordinates) VALUES (" + "'" + str(eq_time) + "', " + str(eq_mag) + ", '" + eq_place + "', '" + eq_sources + "', '" + eq_type + "', '" + str(eq_coordinates) + "')"
+            sql_statement = "INSERT INTO eq_table (eq_time, magnitude, place, sources, type, coordinates) VALUES ('" + str(eq_time) + "', " + str(eq_mag) + ", '" + eq_place + "', '" + eq_sources + "', '" + eq_type + "', '" + str(eq_coordinates) + "')"
             cs.execute(sql_statement)
-            one_row = cs.fetchone()
         except:
             print('Except Error', sql_statement)
 
 @task
-def upload_hourly_moon_position():
-    URL = "https://theskylive.com/quickaccess?objects=moon&data=equatorial-time"
+def upload_hourly_moon_position(cs):
+    URL = "https://www.timeanddate.com/astronomy/moon/light.html"
     page = requests.get(URL)
     soup = BeautifulSoup(page.content, "html.parser")
-    results = soup.find_all("div", class_="keyinfobox")
-    i=0
-    for job_element in results:
-        i+=1
-        if i == 4:
-            declination = job_element.find("ar").text
-        if i == 5:
-            right_ascension = job_element.find("ar").text
-            
-    right_ascension_format = right_ascension.replace('°', '').replace('’', '').replace('”', '')
-    c = SkyCoord(declination + ' ' + right_ascension_format, unit=(u.hourangle, u.deg))
-    c.replace('<SkyCoord (ICS): (ra, dec) in deg(', '').replace(')', '')
+    results = soup.find_all("div", attrs={"class":"layout-grid__main"})
+    td = results[0].find_all("td")
+    DMSlat = str(td[7])[14:-6] + ' ' + str(td[8])[4]
+    DMSlon = str(td[10])[14:-6] + ' ' + str(td[11])[4]
+    deg, minutes, direction =  re.split('[°\']', DMSlat)
+    lat = (float(deg) + float(minutes)/60) * (-1 if direction in ['W', 'S'] else 1)
+    deg, minutes, direction =  re.split('[°\']', DMSlon)
+    lon = (float(deg) + float(minutes)/60) * (-1 if direction in ['E', 'N'] else 1)
 
     try:
-        sql_statement = "INSERT INTO eq_table (datetime, declination, right_ascencion, lat_lon) VALUES (" + "'" + str(eq_time) + "', " + str(eq_mag) + ", '" + eq_place + "', '" + eq_sources + "', '" + eq_type + "', '" + str(eq_coordinates) + "')"
+        sql_statement = "INSERT INTO moon_table (moon_time, lat, lon) VALUES ('" + str(datetime.now().astimezone(pytz.utc))[0:19] + "', '" + str(lat) + "', '" + str(lon) + "')"
         cs.execute(sql_statement)
-        one_row = cs.fetchone()
     except:
         print('Except Error', sql_statement)
 
 @task
-def close_connection():
+def close_connection(cs):
     cs.close()
-    ctx.close()
     
 
-@flow(log_prints=True, name="prefect-example-hellow-flow")
-def run_pipeline() -> str:
-    open_connection()
-    upload_hourly_earthquake()
-    upload_hourly_moon_position()
-    close_connection()
+@flow(log_prints=True)
+def run_pipeline():
+    cs = open_connection()
+    upload_hourly_earthquake(cs)
+    upload_hourly_moon_position(cs)
+    close_connection(cs)
 
 #    run_dbt_cloud_job(
 #        dbt_cloud_job=DbtCloudJob.load(dbt_cloud_credentials, "245496")
